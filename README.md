@@ -2,7 +2,9 @@
 
 [LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) running in ComfyUI as a RunPod serverless worker. It generates video with synchronized audio from text or from an image. The sample requests go up to 1920x1088.
 
-## What the worker loads
+All model files are baked into the Docker image, so the endpoint needs no network volume and no Hugging Face token.
+
+## What is in the image
 
 | Part | File | Size |
 | --- | --- | --- |
@@ -13,64 +15,59 @@
 | Latent upscaler (2x) | `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors` | 1.0 GB |
 | Audio VAE | `ltx-2.5-audio-vae-bf16.safetensors` | 0.4 GB |
 
-These are the files ComfyUI's own LTX-2.5 templates load. They come from [Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) and, for the prompt enhancer, [Comfy-Org/gemma-4](https://huggingface.co/Comfy-Org/gemma-4), both at pinned revisions. The models total 44.9 GB. The list lives in [src/download_models.sh](src/download_models.sh).
+These are the files ComfyUI's own LTX-2.5 templates load. The models total 44.9 GB.
 
 The image also has ComfyUI v0.39.0 and PyTorch 2.14.1 built for CUDA 13.0.
 
-## Hugging Face access
+### Where the weights come from
 
-Unlike the MiniMax H3 and Wan workers, this one needs a Hugging Face token. `Lightricks/LTX-2.5` is a gated repo, and its files return 401 without one.
+The official repo, [Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5), is gated: its files only download with a Hugging Face token, and RunPod's GitHub build cannot be given one. The Dockerfile therefore takes the five LTX files from [osantinello/LTX25_Models](https://huggingface.co/osantinello/LTX25_Models), an ungated third-party copy, pinned to a commit so its content cannot change. The prompt enhancer comes from [Comfy-Org/gemma-4](https://huggingface.co/Comfy-Org/gemma-4), also pinned.
 
-1. Sign in to Hugging Face, open the [model page](https://huggingface.co/Lightricks/LTX-2.5) and click **Agree and Access**.
-2. Create a read token for that account under **Settings → Access Tokens**.
+How far the copy has been checked against the official files:
 
-Where the token goes depends on how you deploy.
+- The video VAE, audio VAE and latent upscaler are byte-identical to the official ones.
+- The diffusion model and text encoder have the official file sizes, but their hashes have not been compared.
+
+To compare those two, read the official SHA-256 with a token whose account has access to the gated repo:
+
+```bash
+curl -sI -H "Authorization: Bearer hf_xxx" https://huggingface.co/Lightricks/LTX-2.5/resolve/main/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors
+curl -sI -H "Authorization: Bearer hf_xxx" https://huggingface.co/Lightricks/LTX-2.5/resolve/main/text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors
+```
+
+The `x-linked-etag` header in each reply is the official hash. The copy holds:
+
+| File | SHA-256 in the copy |
+| --- | --- |
+| Diffusion model | `c4279eeff115cbeaca494bd2183e7d768c38fe85a184dc6afbb7159157c44334` |
+| Text encoder | `6ce688a0aa98a5fa36a9f1e6c3f42152a498cc2b53ee8c15674c64244f91487f` |
+
+If the copy is ever deleted, rebuilds fail until `LTX_REPO` in the Dockerfile points somewhere else. Images that are already built keep working.
 
 ## Deploy
 
-### Option A: RunPod builds from GitHub, models on a network volume
+RunPod builds the image from this repo; nothing is built locally.
 
-RunPod's GitHub build has no documented way to pass a build argument or secret, so it builds the image without models. The worker then downloads them the first time it starts.
-
-1. Create a network volume of at least 60 GB in the data center you will use.
-2. In the RunPod console, go to **Serverless → New Endpoint → Import Git Repository** and pick this repo, branch `main`, Dockerfile path `Dockerfile`.
-3. Attach the network volume, add `HF_TOKEN` as an environment variable, and set the endpoint options below.
-4. Keep max workers at 1 and send [test_input.json](test_input.json). The first worker downloads the models to `/runpod-volume/ltx-2.5/models`, which adds several minutes to that one start.
-5. Raise max workers. Later workers find the files on the volume and download nothing.
-
-To rebuild after a change, publish a new GitHub release.
-
-Without a network volume the worker still starts, but it downloads all 44.9 GB to the container disk on every cold start, and the container disk must be at least 60 GB. Use that only for a quick test.
-
-### Option B: models baked into the image
-
-Build the image somewhere you can pass the token, push it to a registry, and create the endpoint from that image. The endpoint then needs no network volume and no `HF_TOKEN`.
-
-```bash
-docker build --platform linux/amd64 --build-arg HF_TOKEN=hf_xxx -t <registry>/runpod-ltx-2.5:latest .
-docker push <registry>/runpod-ltx-2.5:latest
-```
-
-A build argument is recorded in the image history, so anyone who can pull the image can read the token. Use a fine-grained token that can only read this one repo, and keep the image in a private registry.
-
-### Endpoint settings
+1. In the RunPod console, go to **Serverless → New Endpoint → Import Git Repository** and pick this repo, branch `main`, Dockerfile path `Dockerfile`.
+2. Set the endpoint options below.
+3. Deploy. To rebuild after a change, publish a new GitHub release.
 
 | Setting | Value | Why |
 | --- | --- | --- |
 | Allowed CUDA Versions | `13.0` | The image's PyTorch needs NVIDIA driver 580 or newer. On an older host the worker exits at startup. |
 | GPU | 48 GB | The diffusion model is 21.5 GB and the text encoder 15.4 GB. Smaller cards have not been tried. |
-| Network volume | Option A only | Holds the models so they are downloaded once. |
 | Execution timeout | 1800 s to start | The default is 600 s, and the first job on a cold worker also loads about 40 GB of models. |
-| Max workers | 1 while testing | With option A it also keeps two workers from downloading the same files at once. |
+| Max workers | 1 while testing | |
 
 Environment variables:
 
 | Variable | Needed | Purpose |
 | --- | --- | --- |
-| `HF_TOKEN` | Option A | Downloads the gated model files when the worker starts |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Yes | S3 upload and Lambda callbacks |
 | `BUCKET_NAME` | Yes, unless every request sends `data.bucketName` | Bucket for the output video |
 | `AWS_REGION` | No, defaults to `ap-south-1` | |
+
+RunPod's GitHub builds are limited to an 80 GB image, 160 minutes in total, and 30 minutes for the `docker build` step. Download speeds vary a lot between builds, so if one times out, start it again. If it keeps timing out while downloading models, build the image elsewhere and push it to a registry.
 
 ## Request
 
@@ -145,7 +142,7 @@ ComfyUI's own size table for these graphs stops at `2.0`. The graph accepts more
 
 ## License
 
-The LTX-2.5 weights are under the [LTX-2.x Community License Agreement](https://github.com/Lightricks/LTX-2/blob/main/LICENSE-2_x). Read it before putting this in front of users. The parts that affect a deployment:
+The LTX-2.5 weights are under the [LTX-2.x Community License Agreement](https://github.com/Lightricks/LTX-2/blob/main/LICENSE-2_x). That holds wherever they are downloaded from, so accept it on the [official model page](https://huggingface.co/Lightricks/LTX-2.5) and read it before putting this in front of users. The parts that affect a deployment:
 
 - It is free to use, including as a hosted service, for organizations with under 10 million USD in yearly revenue. At or above that, a paid commercial agreement with Lightricks is required. Affiliates under common control are counted together.
 - Users must be bound to the license's use restrictions.

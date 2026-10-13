@@ -26,19 +26,6 @@ except Exception as e:
 fi
 echo "worker-comfyui: GPU available - $GPU_CHECK"
 
-# The models are in the image when it was built with HF_TOKEN. Otherwise fetch
-# them now, onto the network volume when one is attached so that only the first
-# worker pays for the download.
-if [ -d /runpod-volume ]; then
-    MODEL_STORE=/runpod-volume/ltx-2.5/models
-else
-    MODEL_STORE=/comfyui/models
-fi
-if ! /download_models.sh "${MODEL_STORE}"; then
-    echo "worker-comfyui: Model files are missing and could not be downloaded."
-    exit 1
-fi
-
 echo "worker-comfyui: Starting ComfyUI"
 
 # Allow operators to tweak verbosity; default is DEBUG.

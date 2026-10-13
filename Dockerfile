@@ -1,7 +1,7 @@
 
 # LTX-2.5: text/image to video with audio, up to native high resolutions
 # ComfyUI on RunPod Serverless
-# Model weights are baked into the image when HF_TOKEN is passed at build time.
+# All model weights baked into the image.
 
 ARG BASE_IMAGE=nvidia/cuda:13.0.3-base-ubuntu24.04
 FROM ${BASE_IMAGE} AS base
@@ -79,27 +79,41 @@ RUN uv pip install \
 RUN cd /comfyui && timeout 300 \
     python main.py --quick-test-for-ci --cpu
 
-ADD src/download_models.sh /download_models.sh
-RUN chmod +x /download_models.sh
-
-# Lightricks/LTX-2.5 is a gated repo, so its weights only download with a
-# Hugging Face token whose account has accepted the model license. Pass
-# --build-arg HF_TOKEN=hf_... to bake the models into the image. Without it the
-# image is built without models and the worker fetches them when it starts.
-# Declared here, not at the top, so the token stays out of the layers above.
-ARG HF_TOKEN=""
+# The official Lightricks/LTX-2.5 repo is gated, and RunPod's builder cannot be
+# given a Hugging Face token. The weights therefore come from an ungated copy of
+# the same files. Both repos are pinned to a commit, so the content cannot change.
+# Declared here, not at the top, so the layers above stay cached when these move.
+ARG LTX_REPO=https://huggingface.co/osantinello/LTX25_Models/resolve/a2faa81527c7d8e66dc7e233282ab3b98f352597
+ARG GEMMA_REPO=https://huggingface.co/Comfy-Org/gemma-4/resolve/63d0f7c476756b88910170c1df75e2384ea1af31/text_encoders
 
 # Download the LTX-2.5 diffusion model.
-RUN if [ -n "${HF_TOKEN}" ]; then \
-      /download_models.sh /comfyui/models diffusion_models; \
-    else \
-      echo "HF_TOKEN not set: models will be downloaded when the worker starts"; \
-    fi
+RUN set -e; \
+    fetch() { \
+      mkdir -p "/comfyui/models/$1"; \
+      wget -nv --tries=5 \
+        -O "/comfyui/models/$1/$2" \
+        "$3/$2"; \
+    }; \
+    fetch diffusion_models ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors "${LTX_REPO}"
 
 # Download the text encoders, video/audio VAEs and latent upscaler.
-RUN if [ -n "${HF_TOKEN}" ]; then \
-      /download_models.sh /comfyui/models text_encoders vae latent_upscale_models; \
-    fi
+RUN set -e; \
+    fetch() { \
+      mkdir -p "/comfyui/models/$1"; \
+      wget -nv --tries=5 \
+        -O "/comfyui/models/$1/$2" \
+        "$3/$2"; \
+    }; \
+    fetch text_encoders gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors "${LTX_REPO}" & p1=$!; \
+    fetch text_encoders gemma4_e2b_it_int8_convrot.safetensors "${GEMMA_REPO}" & p2=$!; \
+    fetch vae ltx-2.5-video-vae-bf16.safetensors "${LTX_REPO}" & p3=$!; \
+    fetch vae ltx-2.5-audio-vae-bf16.safetensors "${LTX_REPO}" & p4=$!; \
+    fetch latent_upscale_models ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors "${LTX_REPO}" & p5=$!; \
+    wait "$p1"; \
+    wait "$p2"; \
+    wait "$p3"; \
+    wait "$p4"; \
+    wait "$p5"
 
 WORKDIR /
 
