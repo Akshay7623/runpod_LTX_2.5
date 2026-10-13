@@ -98,6 +98,8 @@ Three ready-made requests are in the repo:
 - [sample-req-t2v.json](sample-req-t2v.json): text to video, 1920x1088, 5 seconds.
 - [sample-req-i2v.json](sample-req-i2v.json): image to video, 1920x1088, 5 seconds. Replace `<BASE64_IMAGE>` with a real image.
 
+The same two 1920x1088 graphs are also in [workflow-t2v.json](workflow-t2v.json) and [workflow-i2v.json](workflow-i2v.json) on their own, without the request wrapper. Each is the value to send as `input.workflow`.
+
 They are ComfyUI's published LTX-2.5 graphs (`video_ltx2_5_t2v` and `video_ltx2_5_i2v`) in API format, with two changes besides the values below:
 
 - The `PreviewAny` node is removed. It is a second output node, and with two outputs ComfyUI accepts a request whose video branch failed validation, runs only the preview, and reports success with no video. With one output, a bad request is rejected and the failure callback fires.
